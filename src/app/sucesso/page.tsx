@@ -6,90 +6,44 @@ import Link from "next/link";
 export default function SucessoPage() {
   const [pixData, setPixData] = useState<any>(null);
   const [copiado, setCopiado] = useState(false);
-  const [tempoRestante, setTempoRestante] = useState<string>("--:--");
-  const [expirado, setExpirado] = useState(false);
+  const [carregando, setCarregando] = useState(true);
 
   useEffect(() => {
-    const pixSalvo = localStorage.getItem("@FloresEFe:pix");
-    if (pixSalvo) {
-      setPixData(JSON.parse(pixSalvo));
+    // Busca os dados do PIX no armazenamento local
+    const dados = localStorage.getItem("@FloresEFe:pix");
+    if (dados) {
+      setPixData(JSON.parse(dados));
     }
+    setCarregando(false);
   }, []);
 
-  // Efeito para rodar o cronômetro
-  useEffect(() => {
-    if (!pixData?.expiracao) return;
-
-    const atualizarCronometro = () => {
-      const agora = new Date().getTime();
-      const limite = new Date(pixData.expiracao).getTime();
-      const diferenca = limite - agora;
-
-      if (diferenca <= 0) {
-        setExpirado(true);
-        setTempoRestante("00:00");
-        return;
-      }
-
-      // Calcula os minutos e segundos
-      const minutos = Math.floor((diferenca % (1000 * 60 * 60)) / (1000 * 60));
-      const segundos = Math.floor((diferenca % (1000 * 60)) / 1000);
-
-      // Formata para ficar com dois zeros (ex: 09:05)
-      setTempoRestante(
-        `${minutos.toString().padStart(2, "0")}:${segundos.toString().padStart(2, "0")}`,
-      );
-    };
-
-    atualizarCronometro(); // Chama a primeira vez imediatamente
-    const intervalo = setInterval(atualizarCronometro, 1000); // Atualiza a cada 1 segundo
-
-    return () => clearInterval(intervalo);
-  }, [pixData]);
-
-  const handleCopiarPix = () => {
-    if (pixData?.qrCodeCopiaECola && !expirado) {
+  const handleCopiar = () => {
+    if (pixData?.qrCodeCopiaECola) {
       navigator.clipboard.writeText(pixData.qrCodeCopiaECola);
       setCopiado(true);
       setTimeout(() => setCopiado(false), 3000);
     }
   };
 
+  if (carregando) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-stone-900"></div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-[80vh] flex flex-col items-center justify-center bg-gray-50 px-4 py-12 font-sans">
-      <div className="bg-white p-8 md:p-12 rounded-lg shadow-sm text-center max-w-xl w-full border border-gray-100">
-        <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
-          <svg
-            className="w-8 h-8 text-green-600"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={3}
-              d="M5 13l4 4L19 7"
-            />
-          </svg>
-        </div>
-
-        <h1 className="text-3xl font-serif text-gray-900 mb-2">
-          Pedido Reservado!
-        </h1>
-        <p className="text-gray-500 mb-8">
-          Falta pouco. Escaneie o QR Code abaixo ou utilize a opção Pix Copia e
-          Cola no aplicativo do seu banco para confirmar a compra.
-        </p>
-
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 font-sans">
+      <div className="max-w-md w-full bg-white p-8 rounded-xl shadow-sm border border-gray-100 text-center">
         {pixData ? (
-          <div className="bg-stone-50 border border-stone-200 rounded-lg p-6 mb-8 relative overflow-hidden">
-            {/* Aviso de Tempo */}
-            <div
-              className={`py-2 px-4 mb-6 rounded text-sm font-bold flex items-center justify-center gap-2 ${expirado ? "bg-red-100 text-red-700" : "bg-yellow-100 text-yellow-800"}`}
-            >
+          /* ==============================================================
+             CENÁRIO 1: PAGAMENTO VIA PIX (Aguardando Pagamento)
+             ============================================================== */
+          <div className="animate-fadeIn">
+            <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-6">
               <svg
-                className="w-4 h-4"
+                className="w-8 h-8 text-yellow-600"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -97,64 +51,131 @@ export default function SucessoPage() {
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  strokeWidth={2}
+                  strokeWidth="2"
                   d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
+                ></path>
               </svg>
-              {expirado
-                ? "Este código PIX expirou."
-                : `Pague em até ${tempoRestante}`}
             </div>
 
-            <h3 className="font-bold text-gray-900 uppercase tracking-wider text-sm mb-4">
-              Pague com QR Code
-            </h3>
+            <h1 className="text-2xl font-serif font-bold text-gray-900 mb-2 uppercase tracking-widest">
+              Pedido Reservado!
+            </h1>
+            <p className="text-sm text-gray-500 mb-8">
+              Falta pouco! Pague o PIX abaixo para garantir seus produtos.
+            </p>
 
-            <div
-              className={`bg-white p-2 rounded-lg inline-block border border-gray-200 mb-6 transition-opacity ${expirado ? "opacity-30" : "opacity-100"}`}
-            >
+            <div className="bg-stone-50 border border-stone-200 rounded-lg p-6 mb-6">
               <img
                 src={pixData.qrCodeImagem}
-                alt="QR Code do PIX"
-                className="w-48 h-48 object-contain"
+                alt="QR Code PIX"
+                className="w-48 h-48 mx-auto mix-blend-multiply"
               />
             </div>
 
-            <div className="space-y-3">
-              <h3 className="font-bold text-gray-900 uppercase tracking-wider text-sm">
-                Ou Pix Copia e Cola
-              </h3>
+            <div className="mb-8">
+              <p className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">
+                Código Copia e Cola
+              </p>
               <input
                 type="text"
                 readOnly
                 value={pixData.qrCodeCopiaECola}
-                className={`w-full bg-white border border-gray-300 text-gray-500 text-xs py-3 px-4 rounded focus:outline-none ${expirado ? "bg-gray-100" : ""}`}
+                className="w-full bg-gray-50 border border-gray-200 text-gray-500 text-xs py-3 px-3 rounded focus:outline-none mb-3 text-center"
               />
               <button
-                onClick={handleCopiarPix}
-                disabled={expirado}
-                className="w-full bg-stone-900 text-white py-3 text-sm font-bold uppercase tracking-widest hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleCopiar}
+                className="w-full bg-stone-900 text-white py-4 text-sm font-bold uppercase tracking-widest hover:bg-black transition-colors"
               >
-                {expirado
-                  ? "Código Expirado"
-                  : copiado
-                    ? "Código Copiado!"
-                    : "Copiar Código Pix"}
+                {copiado ? "Código Copiado!" : "Copiar Código Pix"}
               </button>
             </div>
           </div>
         ) : (
-          <div className="p-10 text-gray-400 text-sm tracking-widest uppercase">
-            Carregando informações de pagamento...
+          /* ==============================================================
+             CENÁRIO 2: PAGAMENTO VIA CARTÃO DE CRÉDITO (Aprovado na hora)
+             ============================================================== */
+          <div className="animate-fadeIn">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+              <svg
+                className="w-8 h-8 text-green-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M5 13l4 4L19 7"
+                ></path>
+              </svg>
+            </div>
+
+            <h1 className="text-2xl font-serif font-bold text-gray-900 mb-2 uppercase tracking-widest">
+              Pedido Confirmado!
+            </h1>
+            <p className="text-sm text-gray-500 mb-8">
+              O pagamento foi aprovado com sucesso. Seu pedido já está sendo
+              preparado.
+            </p>
+
+            <div className="bg-stone-50 border border-stone-200 rounded-lg p-6 mb-8 text-left space-y-4">
+              <div className="flex items-start gap-3">
+                <svg
+                  className="w-5 h-5 text-stone-400 flex-shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                  ></path>
+                </svg>
+                <p className="text-sm text-stone-600">
+                  Enviamos um e-mail com o recibo e os detalhes da sua compra.
+                </p>
+              </div>
+              <div className="flex items-start gap-3">
+                <svg
+                  className="w-5 h-5 text-stone-400 flex-shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+                  ></path>
+                </svg>
+                <p className="text-sm text-stone-600">
+                  Você pode acompanhar o status da entrega na área{" "}
+                  <strong>Meus Pedidos</strong> no menu principal.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
+        {/* BOTÃO COMPARTILHADO (Aparece nos dois cenários) */}
         <Link
           href="/"
-          className="text-sm font-bold text-gray-500 hover:text-black border-b border-transparent hover:border-black transition-all pb-1"
+          className={`block w-full py-4 text-sm font-bold uppercase tracking-widest transition-colors ${pixData ? "bg-transparent text-stone-500 border border-stone-300 hover:bg-stone-50" : "bg-stone-900 text-white hover:bg-black"}`}
         >
           Voltar para a Loja
         </Link>
+        <div className="mt-4">
+          <Link
+            href="/pedidos"
+            className="text-xs text-stone-500 underline hover:text-stone-900"
+          >
+            Acompanhar Meus Pedidos
+          </Link>
+        </div>
       </div>
     </div>
   );

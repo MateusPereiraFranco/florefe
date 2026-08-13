@@ -24,10 +24,10 @@ interface CartContextData {
   updateQuantity: (id: string, tamanho: string, quantidade: number) => void;
   cartTotal: number;
   cartCount: number;
-  // --- NOVAS FUNÇÕES AQUI ---
   isCartOpen: boolean;
   openCart: () => void;
   closeCart: () => void;
+  clearCart: () => void;
 }
 
 const CartContext = createContext<CartContextData>({} as CartContextData);
@@ -55,6 +55,11 @@ export function CartProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("@FloresEFe:cart", JSON.stringify(cartItems));
     }
   }, [cartItems, isInitialized]);
+
+  const clearCart = () => {
+    setCartItems([]);
+    localStorage.removeItem("@FloresEFe:cart");
+  };
 
   const addToCart = (newItem: CartItem) => {
     setCartItems((prevItems) => {
@@ -111,6 +116,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         isCartOpen,
         openCart,
         closeCart,
+        clearCart,
       }}
     >
       {children}

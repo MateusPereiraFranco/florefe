@@ -1,27 +1,26 @@
 "use server";
 
 import { supabaseAdmin } from "../../lib/supabase";
-// Importando as classes oficiais do Mercado Pago
 import { MercadoPagoConfig, Payment } from "mercadopago";
 
 export async function processarCheckout(dados: any) {
-  if (!supabaseAdmin) {
+  if (!supabaseAdmin)
     throw new Error("Erro crítico: Supabase Admin não inicializado.");
-  }
 
-  const { cliente, endereco, carrinho, total } = dados;
+  const { cliente, endereco, carrinho, total, metodoPagamento, dadosCartao } =
+    dados;
 
   try {
-    // 1. BUSCAR OU CRIAR CLIENTE (O mesmo código seguro de antes)
+    // 1. BUSCAR OU CRIAR CLIENTE
     let clienteId;
     const { data: clienteExistente } = await supabaseAdmin
       .from("clientes")
       .select("id")
       .eq("email", cliente.email)
-      .single();
+      .limit(1);
 
-    if (clienteExistente) {
-      clienteId = clienteExistente.id;
+    if (clienteExistente && clienteExistente.length > 0) {
+      clienteId = clienteExistente[0].id;
     } else {
       const { data: novoCliente, error: erroCliente } = await supabaseAdmin
         .from("clientes")
@@ -38,7 +37,7 @@ export async function processarCheckout(dados: any) {
       clienteId = novoCliente.id;
     }
 
-    // 2. CRIAR O PEDIDO NO BANCO
+    // 2. CRIAR O PEDIDO NO BANCO (Status inicial: pendente)
     const { data: pedido, error: erroPedido } = await supabaseAdmin
       .from("pedidos")
       .insert([
@@ -52,7 +51,7 @@ export async function processarCheckout(dados: any) {
           endereco_cidade: endereco.cidade,
           endereco_estado: endereco.estado,
           endereco_complemento: endereco.complemento,
-          status: "pendente", // Fica pendente até o cliente pagar o PIX
+          status: "pendente",
         },
       ])
       .select()
@@ -68,77 +67,112 @@ export async function processarCheckout(dados: any) {
       preco_unitario: item.preco,
     }));
 
-    const { error: erroItens } = await supabaseAdmin
-      .from("itens_pedido")
-      .insert(itensParaInserir);
-
-    if (erroItens) throw new Error("Erro ao salvar os itens.");
+    await supabaseAdmin.from("itens_pedido").insert(itensParaInserir);
 
     // -----------------------------------------------------------
-    // 4. INTEGRAÇÃO MERCADO PAGO - GERAÇÃO DO PIX
+    // 4. INTEGRAÇÃO MERCADO PAGO - CARTÃO OU PIX
     // -----------------------------------------------------------
-
     const client = new MercadoPagoConfig({
       accessToken: process.env.MP_ACCESS_TOKEN!,
     });
     const payment = new Payment(client);
 
-    // Cria a data atual e adiciona 30 minutos
-    const dataExpiracao = new Date();
-    dataExpiracao.setMinutes(dataExpiracao.getMinutes() + 30);
-    // O Mercado Pago exige o formato ISO com o fuso horário correto (vamos usar o UTC-03:00)
-    // Para simplificar no código, passamos o timezone exato da string ISO do JS
-    const dataExpiracaoISO = dataExpiracao.toISOString();
-
-    const pixData = await payment.create({
-      body: {
-        transaction_amount: Number(total.toFixed(2)),
-        description: `Pedido Flores e Fé #${pedido.id.substring(0, 6)}`,
-        payment_method_id: "pix",
-        date_of_expiration: dataExpiracaoISO, // <--- ADICIONAMOS A VALIDADE AQUI
-        external_reference: pedido.id,
-        payer: {
-          email: cliente.email,
-          first_name: cliente.nome,
-          last_name: cliente.sobrenome,
+    // ------------------ FLUXO DO CARTÃO ------------------
+    if (metodoPagamento === "cartao") {
+      // O formulário do front-end já envia os dados no formato perfeito exigido pelo Mercado Pago
+      const pagamentoCartao = await payment.create({
+        body: {
+          ...dadosCartao, // Aqui vem o Token do cartão, parcelas, bandeira e CPF do titular
+          transaction_amount: Number(total.toFixed(2)),
+          description: `Pedido Flores e Fé #${pedido.id.substring(0, 6)}`,
+          external_reference: pedido.id,
         },
-      },
-    });
+      });
 
-    const qrCode = pixData.point_of_interaction?.transaction_data?.qr_code;
-    const qrCodeBase64 =
-      pixData.point_of_interaction?.transaction_data?.qr_code_base64;
+      // Se o cartão for recusado (ex: sem limite), barramos aqui
+      if (pagamentoCartao.status === "rejected") {
+        // Marcamos como cancelado no banco
+        await supabaseAdmin
+          .from("pedidos")
+          .update({ status: "cancelado" })
+          .eq("id", pedido.id);
+        return {
+          sucesso: false,
+          erro: "O pagamento foi recusado pelo emissor do cartão. Verifique os dados ou o limite.",
+        };
+      }
 
-    if (!qrCode || !qrCodeBase64) {
-      throw new Error("Mercado Pago não retornou os dados do PIX.");
+      // Se aprovou, já atualizamos o banco imediatamente
+      if (pagamentoCartao.status === "approved") {
+        await supabaseAdmin
+          .from("pedidos")
+          .update({ status: "pago" })
+          .eq("id", pedido.id);
+      }
+
+      return {
+        sucesso: true,
+        pedidoId: pedido.id,
+        metodo: "cartao",
+        status_pagamento: pagamentoCartao.status, // Pode ser 'approved' ou 'in_process' (em análise)
+      };
     }
+    // ------------------ FLUXO DO PIX ------------------
+    else {
+      const dataExpiracao = new Date();
+      dataExpiracao.setMinutes(dataExpiracao.getMinutes() + 30);
+      const dataExpiracaoISO = dataExpiracao.toISOString();
 
-    const pixImagemCerta = `data:image/jpeg;base64,${qrCodeBase64}`;
+      const pixData = await payment.create({
+        body: {
+          transaction_amount: Number(total.toFixed(2)),
+          description: `Pedido Flores e Fé #${pedido.id.substring(0, 6)}`,
+          payment_method_id: "pix",
+          date_of_expiration: dataExpiracaoISO,
+          external_reference: pedido.id,
+          payer: {
+            email: cliente.email,
+            first_name: cliente.nome,
+            last_name: cliente.sobrenome,
+          },
+        },
+      });
 
-    // NOVO: Atualiza o pedido no banco salvando as informações do PIX gerado!
-    await supabaseAdmin
-      .from("pedidos")
-      .update({
-        pix_copia_e_cola: qrCode,
-        pix_imagem: pixImagemCerta,
-        pix_expiracao: dataExpiracaoISO,
-      })
-      .eq("id", pedido.id);
+      const qrCode = pixData.point_of_interaction?.transaction_data?.qr_code;
+      const qrCodeBase64 =
+        pixData.point_of_interaction?.transaction_data?.qr_code_base64;
 
-    return {
-      sucesso: true,
-      pedidoId: pedido.id,
-      pix: {
-        qrCodeCopiaECola: qrCode,
-        qrCodeImagem: pixImagemCerta,
-        expiracao: dataExpiracaoISO,
-      },
-    };
+      if (!qrCode || !qrCodeBase64) {
+        throw new Error("Mercado Pago não retornou os dados do PIX.");
+      }
+
+      const pixImagemCerta = `data:image/jpeg;base64,${qrCodeBase64}`;
+
+      await supabaseAdmin
+        .from("pedidos")
+        .update({
+          pix_copia_e_cola: qrCode,
+          pix_imagem: pixImagemCerta,
+          pix_expiracao: dataExpiracaoISO,
+        })
+        .eq("id", pedido.id);
+
+      return {
+        sucesso: true,
+        pedidoId: pedido.id,
+        metodo: "pix",
+        pix: {
+          qrCodeCopiaECola: qrCode,
+          qrCodeImagem: pixImagemCerta,
+          expiracao: dataExpiracaoISO,
+        },
+      };
+    }
   } catch (error) {
     console.error("Falha no processamento:", error);
     return {
       sucesso: false,
-      erro: "Falha interna ao processar o pedido e pagamento.",
+      erro: "Falha ao processar o pagamento. Tente novamente.",
     };
   }
 }

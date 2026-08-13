@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { buscarPedidosPorEmail } from "../actions/pedidos";
 
 export default function PedidosPage() {
@@ -9,17 +9,25 @@ export default function PedidosPage() {
   const [buscando, setBuscando] = useState(false);
   const [mensagem, setMensagem] = useState("");
 
-  // Estado para mostrar o PIX do pedido selecionado
   const [pixAberto, setPixAberto] = useState<string | null>(null);
   const [copiado, setCopiado] = useState(false);
 
-  const handleBuscar = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // NOVO: Quando a página carregar, verifica se tem e-mail salvo e já busca!
+  useEffect(() => {
+    const emailSalvo = localStorage.getItem("@FloresEFe:email");
+    if (emailSalvo) {
+      setEmail(emailSalvo);
+      realizarBusca(emailSalvo);
+    }
+  }, []);
+
+  // Separei a lógica de busca para poder ser chamada tanto pelo botão quanto automaticamente
+  const realizarBusca = async (emailBusca: string) => {
     setBuscando(true);
     setMensagem("");
     setPixAberto(null);
 
-    const resultado = await buscarPedidosPorEmail(email);
+    const resultado = await buscarPedidosPorEmail(emailBusca);
 
     if (resultado.sucesso && resultado.pedidos) {
       setPedidos(resultado.pedidos);
@@ -28,6 +36,12 @@ export default function PedidosPage() {
       setMensagem(resultado.erro || "Erro desconhecido.");
     }
     setBuscando(false);
+  };
+
+  const handleBuscar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    localStorage.setItem("@FloresEFe:email", email); // Se ele digitar outro e-mail, salva o novo
+    await realizarBusca(email);
   };
 
   const handleCopiar = (texto: string) => {
@@ -39,6 +53,8 @@ export default function PedidosPage() {
   const verificarSeExpirou = (dataExpiracao: string) => {
     return new Date(dataExpiracao).getTime() < new Date().getTime();
   };
+
+  // ... (O restante do return (HTML) continua EXATAMENTE igual ao que já estava)
 
   return (
     <div className="min-h-[70vh] bg-gray-50 py-12 font-sans">
