@@ -5,7 +5,8 @@ export default async function Home() {
   const { data: produtos_reais, error } = await supabase
     .from("produtos")
     .select("*")
-    .eq("em_estoque", true);
+    .eq("em_estoque", true)
+    .eq("ativo", true); // <--- A MÁGICA ENTRA AQUI!
 
   if (error) {
     console.error("Erro ao buscar produtos:", error);
