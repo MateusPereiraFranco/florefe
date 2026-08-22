@@ -47,12 +47,24 @@ export default function CheckoutPage() {
     estado: "",
     complemento: "",
   });
+
+  // ESTADOS DE FRETE API
+  const [opcoesFrete, setOpcoesFrete] = useState<any[]>([]);
+  const [freteSelecionado, setFreteSelecionado] = useState<any | null>(null);
+  const [isCalculandoFrete, setIsCalculandoFrete] = useState(false);
+
+  // Calcula o total dinamicamente
+  const totalComFrete = useMemo(() => {
+    const valorFrete = freteSelecionado ? Number(freteSelecionado.price) : 0;
+    return cartTotal + valorFrete;
+  }, [cartTotal, freteSelecionado]);
+
   const mpInitialization = useMemo(
     () => ({
-      amount: Number(cartTotal.toFixed(2)),
+      amount: Number(totalComFrete.toFixed(2)),
       payer: { email: email },
     }),
-    [cartTotal, email],
+    [totalComFrete, email],
   );
 
   const mpCustomization = useMemo(
@@ -84,6 +96,8 @@ export default function CheckoutPage() {
       setIsSearching(true);
       setCepError(false);
       setTipoFrete(null);
+      setOpcoesFrete([]);
+      setFreteSelecionado(null);
 
       try {
         const response = await fetch(`https://viacep.com.br/ws/${value}/json/`);
@@ -108,14 +122,39 @@ export default function CheckoutPage() {
             estado: data.uf || "",
           }));
 
+          // Se a API não voltar logradouro (faixa única), o cliente pode digitar
           setIsStreetReadOnly(data.logradouro && data.logradouro.length > 0);
 
           const cidadeNormalizada = normalizarTexto(data.localidade);
-          setTipoFrete(
-            CIDADES_ENTREGA_LOCAL.includes(cidadeNormalizada)
-              ? "local"
-              : "correios",
-          );
+          const ehLocal = CIDADES_ENTREGA_LOCAL.includes(cidadeNormalizada);
+          setTipoFrete(ehLocal ? "local" : "correios");
+
+          // SE FOR PARA FORA, CHAMA A API DE FRETE
+          if (!ehLocal) {
+            setIsCalculandoFrete(true);
+            try {
+              const res = await fetch("/api/frete", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  cepDestino: value,
+                  carrinho: cartItems,
+                }),
+              });
+              const dataFrete = await res.json();
+              if (dataFrete.sucesso) {
+                setOpcoesFrete(dataFrete.fretes);
+                // Seleciona a primeira opção por padrão (ex: Jadlog ou PAC mais barato)
+                if (dataFrete.fretes.length > 0) {
+                  setFreteSelecionado(dataFrete.fretes[0]);
+                }
+              }
+            } catch (err) {
+              console.error("Erro ao calcular frete", err);
+            } finally {
+              setIsCalculandoFrete(false);
+            }
+          }
         }
       } catch (error) {
         setCepError(true);
@@ -133,10 +172,12 @@ export default function CheckoutPage() {
       setIsStreetReadOnly(true);
       setCepError(false);
       setTipoFrete(null);
+      setOpcoesFrete([]);
+      setFreteSelecionado(null);
     }
   };
 
-  // BARREIRA DE VALIDAÇÃO: Só avança para o pagamento se tudo estiver OK
+  // BARREIRA DE VALIDAÇÃO: Só avança se tudo estiver OK
   const handleAvancarParaPagamento = () => {
     if (!email || !nome || !cep || !endereco.logradouro || !numero) {
       alert("Por favor, preencha todos os campos obrigatórios (*).");
@@ -146,15 +187,17 @@ export default function CheckoutPage() {
       alert("Aguarde o cálculo do frete para prosseguir.");
       return;
     }
+    if (tipoFrete === "correios" && !freteSelecionado) {
+      alert("Por favor, selecione uma opção de frete.");
+      return;
+    }
     setEtapa(2);
-    // Rola a tela suavemente para o topo do formulário de pagamento
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleFinalizarCompra = async (dadosPagamentoCartao?: any) => {
-    setErroMensagem(null); // Limpa erros anteriores
+    setErroMensagem(null);
 
-    // Validação da Etapa 1 caso ele tente burlar
     if (!email || !nome || !cep || !endereco.logradouro || !numero) {
       setErroMensagem("Por favor, preencha todos os campos obrigatórios (*).");
       return { sucesso: false };
@@ -166,7 +209,8 @@ export default function CheckoutPage() {
       cliente: { email, nome, sobrenome },
       endereco: { ...endereco, cep, numero },
       carrinho: cartItems,
-      total: cartTotal,
+      total: totalComFrete, // Total já somado com o frete
+      frete: freteSelecionado, // Passando a opção de frete escolhida para salvar no banco
       metodoPagamento: metodoPagamento,
       dadosCartao: dadosPagamentoCartao,
     };
@@ -184,7 +228,6 @@ export default function CheckoutPage() {
       router.push("/sucesso");
       return { sucesso: true };
     } else {
-      // Em vez de alert(), salvamos a mensagem na tela
       setErroMensagem(
         resultado.erro ||
           "Ocorreu um erro ao processar o pagamento. Tente novamente.",
@@ -194,27 +237,19 @@ export default function CheckoutPage() {
     }
   };
 
-  // =========================================================================
-  // BLINDAGEM DO MERCADO PAGO: Evita que o iframe recarregue quando dá erro
-  // =========================================================================
-
-  // 1. Guardamos a nossa função principal numa "caixa fechada" (useRef)
   const finalizarCompraRef = useRef(handleFinalizarCompra);
 
-  // 2. Atualizamos essa caixa silenciosamente nos bastidores
   useEffect(() => {
     finalizarCompraRef.current = handleFinalizarCompra;
   });
 
-  // 3. Criamos funções blindadas que o Mercado Pago vai ler APENAS UMA VEZ!
   const onSubmitCartao = useCallback((param: any) => {
     return new Promise<void>(async (resolve, reject) => {
-      // Usamos a função de dentro da caixa para ter sempre os dados mais frescos
       const res = await finalizarCompraRef.current(param.formData);
       if (res && res.sucesso) {
-        resolve(); // Deu certo, o MP pode comemorar
+        resolve();
       } else {
-        reject(); // Deu erro, o MP vai apenas vibrar o botão, MAS SEM RECARREGAR A TELA!
+        reject();
       }
     });
   }, []);
@@ -226,7 +261,6 @@ export default function CheckoutPage() {
   const onReadyCartao = useCallback(() => {
     setDadosCartaoProntos(true);
   }, []);
-  // =========================================================================
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 font-sans">
@@ -409,14 +443,70 @@ export default function CheckoutPage() {
                         placeholder="Ex: Apto 42, Bloco B..."
                       />
                     </div>
+
+                    {/* OPÇÕES DE FRETE */}
+                    {tipoFrete === "correios" && (
+                      <div className="mt-6 pt-6 border-t border-gray-100">
+                        <label className="block text-xs font-semibold text-gray-700 uppercase tracking-wider mb-4">
+                          Opções de Entrega *
+                        </label>
+                        {isCalculandoFrete ? (
+                          <p className="text-sm text-gray-500 animate-pulse">
+                            Calculando frete...
+                          </p>
+                        ) : opcoesFrete.length > 0 ? (
+                          <div className="space-y-3">
+                            {opcoesFrete.map((opcao) => (
+                              <label
+                                key={opcao.id}
+                                className={`flex items-center justify-between p-4 border cursor-pointer transition-colors ${freteSelecionado?.id === opcao.id ? "border-black bg-gray-50" : "border-gray-200 hover:border-gray-300"}`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <input
+                                    type="radio"
+                                    name="frete"
+                                    value={opcao.id}
+                                    checked={freteSelecionado?.id === opcao.id}
+                                    onChange={() => setFreteSelecionado(opcao)}
+                                    className="text-black focus:ring-black"
+                                  />
+                                  <div>
+                                    <p className="text-sm font-bold text-gray-900">
+                                      {opcao.name}
+                                    </p>
+                                    <p className="text-xs text-gray-500">
+                                      Entrega em até {opcao.delivery_time} dias
+                                      úteis
+                                    </p>
+                                  </div>
+                                </div>
+                                <span className="text-sm font-bold text-gray-900">
+                                  {new Intl.NumberFormat("pt-BR", {
+                                    style: "currency",
+                                    currency: "BRL",
+                                  }).format(Number(opcao.price))}
+                                </span>
+                              </label>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-red-500">
+                            Nenhuma opção de frete disponível para este CEP.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </section>
 
                 {/* BOTÃO PARA AVANÇAR */}
                 <button
                   onClick={handleAvancarParaPagamento}
-                  disabled={cartItems.length === 0}
-                  className="w-full bg-stone-900 text-white py-4 text-sm font-bold uppercase tracking-widest hover:bg-black transition-colors disabled:opacity-50"
+                  disabled={
+                    cartItems.length === 0 ||
+                    (tipoFrete === "correios" && !freteSelecionado)
+                  }
+                  className="w-full bg-stone-900 text-white py-4 text-sm font-bold uppercase tracking-widest hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Ir para o Pagamento
                 </button>
@@ -424,7 +514,7 @@ export default function CheckoutPage() {
             ) : (
               /* --- ETAPA 2: PAGAMENTO --- */
               <div className="space-y-6 animate-fadeIn">
-                {/* RESUMO DOS DADOS (Acordeão Fechado) */}
+                {/* RESUMO DOS DADOS */}
                 <section className="bg-white p-6 border border-gray-100 shadow-sm flex justify-between items-center">
                   <div>
                     <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-1 flex items-center gap-2">
@@ -539,7 +629,7 @@ export default function CheckoutPage() {
             )}
           </div>
 
-          {/* COLUNA DIREITA: RESUMO DO PEDIDO (Estático) */}
+          {/* COLUNA DIREITA: RESUMO DO PEDIDO */}
           <div className="lg:col-span-5">
             <div className="bg-stone-900 text-white p-8 sticky top-24">
               <h2 className="text-lg font-serif font-bold uppercase tracking-widest mb-8">
@@ -597,12 +687,21 @@ export default function CheckoutPage() {
                     )}
                     {tipoFrete === "correios" && (
                       <span className="text-[10px] text-stone-400 uppercase mt-1">
-                        Prazo: Calculado no Envio (Correios)
+                        {freteSelecionado
+                          ? freteSelecionado.name
+                          : "Calculado no Envio"}
                       </span>
                     )}
                   </div>
                   <span className="text-white">
-                    {tipoFrete ? "Grátis" : "--"}
+                    {tipoFrete === "local"
+                      ? "Grátis"
+                      : freteSelecionado
+                        ? new Intl.NumberFormat("pt-BR", {
+                            style: "currency",
+                            currency: "BRL",
+                          }).format(Number(freteSelecionado.price))
+                        : "--"}
                   </span>
                 </div>
               </div>
@@ -615,7 +714,7 @@ export default function CheckoutPage() {
                   {new Intl.NumberFormat("pt-BR", {
                     style: "currency",
                     currency: "BRL",
-                  }).format(cartTotal)}
+                  }).format(totalComFrete)}
                 </span>
               </div>
             </div>
