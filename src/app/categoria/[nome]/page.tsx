@@ -19,7 +19,8 @@ export default async function CategoriaPage({
     .from("produtos")
     .select("*")
     .eq("categoria", categoriaNome)
-    .eq("em_estoque", true);
+    .eq("em_estoque", true)
+    .eq("ativo", true);
 
   if (error) {
     console.error("Erro ao buscar produtos da categoria:", error);
